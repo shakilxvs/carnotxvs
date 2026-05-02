@@ -1,47 +1,96 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Play, Pause, RotateCcw, SlidersHorizontal, Moon, Sun } from 'lucide-react'
+import { Play, Pause, RotateCcw, SlidersHorizontal, Moon, Sun, ChevronRight } from 'lucide-react'
 import BackButton from './BackButton'
 import { efficiency, heatAbsorbed, heatRejected, netWork, copR } from '../utils/carnotPhysics'
 import { useApp } from '../context/AppContext'
 
-// ── SVG layout constants ──────────────────────────────────────────────────────
-const SW = 660, SH = 560
-const CYL_X = 200, CYL_W = 180
-const CYL_TOP = 125, CYL_BOT = 390
-const CYL_MID = CYL_X + CYL_W / 2          // 290
-const PISTON_H = 22, PISTON_PAD = 4
-const CRANK_CX = 490, CRANK_CY = 258
-const CRANK_R = 65, ROD_LEN = 110
-const WHEEL_CX = 560, WHEEL_CY = 258, WHEEL_R = 50
-const RES_X = 148, RES_W = 280
-const HOT_Y = 10, HOT_H = 78
-const COLD_Y = 458, COLD_H = 78
+// ─── SVG coordinate constants ─────────────────────────────────────────────────
+const SW = 640, SH = 468
 
+const RES_X = 172, RES_W = 270, RES_RX = 12
+const HOT_Y = 6,  HOT_H = 70  // bottom = 76
+const CLD_Y = 370, CLD_H = 70  // bottom = 440
+
+const CX = 244, CW = 152        // cylinder left edge + width
+const CY_MID = CX + CW / 2     // 320
+const CY_TOP = 112, CY_BOT = 336
+const PST_H  = 20
+
+const CR_CX = 420, CR_CY = 224, CR_R = 60, ROD_LEN = 118
+const FW_CX = 542, FW_CY = 224, FW_R   = 46
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
 function pistonY(angle) {
-  const cpX = CRANK_CX + CRANK_R * Math.cos(angle)
-  const cpY = CRANK_CY + CRANK_R * Math.sin(angle)
-  const dx = CYL_MID - cpX
+  const cpX = CR_CX + CR_R * Math.cos(angle)
+  const cpY = CR_CY + CR_R * Math.sin(angle)
+  const dx  = CY_MID - cpX
   return cpY - Math.sqrt(Math.max(0, ROD_LEN * ROD_LEN - dx * dx))
 }
+const lerp  = (a, b, t) => a + (b - a) * t
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+const fmt   = v => Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(2) + 'M'
+            : Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(2) + 'k'
+            : v.toFixed(1)
 
-function lerp(a, b, t) { return a + (b - a) * t }
+// ─── GAS MIST ─────────────────────────────────────────────────────────────────
+function GasMist({ pBot, gasRatio, isPlaying, speed }) {
+  const h = Math.max(0, CY_BOT - pBot)
+  if (h < 2) return null
+  const r = Math.round(lerp(59,  220, gasRatio))
+  const g = Math.round(lerp(130, 60,  gasRatio))
+  const b = Math.round(lerp(246, 60,  gasRatio))
+  const col = (a) => `rgba(${r},${g},${b},${a})`
+  return (
+    <g>
+      <defs>
+        <linearGradient id="gasGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor={col(0.55)} />
+          <stop offset="40%"  stopColor={col(0.25)} />
+          <stop offset="100%" stopColor={col(0.10)} />
+        </linearGradient>
+      </defs>
+      <rect x={CX+2} y={pBot} width={CW-4} height={h} fill="url(#gasGrad)" />
+      {[0, 1, 2].map(i => {
+        const bY  = pBot + h * (0.2 + i * 0.28)
+        const bRY = h * 0.14
+        return (
+          <motion.ellipse key={i}
+            cx={CY_MID + (i === 1 ? -18 : i === 2 ? 20 : 0)}
+            cy={bY} rx={CW * 0.35} ry={bRY}
+            fill={col(0.13)}
+            animate={isPlaying ? {
+              cx: [CY_MID+(i===1?-18:i===2?20:0), CY_MID+(i===1?16:i===2?-16:0), CY_MID+(i===1?-18:i===2?20:0)],
+              ry: [bRY, bRY*1.4, bRY],
+              opacity: [0.13, 0.22, 0.13],
+            } : { opacity: 0.1 }}
+            transition={{ duration: (1.2 + i * 0.35) / (speed || 1), repeat: Infinity, ease: 'easeInOut', delay: i * 0.2 }}
+          />
+        )
+      })}
+      <rect x={CX+2} y={pBot} width={CW-4} height={2.5} fill={col(0.65)} />
+    </g>
+  )
+}
 
-// ── Flame particles above hot reservoir ──────────────────────────────────────
+// ─── FLAMES inside hot reservoir ──────────────────────────────────────────────
 function Flames({ active, speed }) {
   if (!active) return null
   return (
     <>
-      {[0, 1, 2, 3, 4, 5, 6].map(i => {
-        const x = RES_X + 28 + i * (RES_W - 56) / 6
-        const dur = (0.55 + (i % 3) * 0.15) / speed
+      {[0.15, 0.3, 0.5, 0.65, 0.82].map((frac, i) => {
+        const x   = RES_X + frac * RES_W
+        const dur = (0.45 + (i % 3) * 0.18) / speed
         return (
           <motion.ellipse key={i}
-            cx={x} cy={HOT_Y + HOT_H - 6}
-            rx={4 + (i % 3)} ry={7 + (i % 4) * 3}
-            fill={i % 2 === 0 ? '#f97316' : '#fbbf24'}
-            fillOpacity={0.82}
-            animate={{ cy: [HOT_Y + HOT_H - 6, HOT_Y + HOT_H - 26, HOT_Y + HOT_H - 6], scaleY: [1, 1.5, 1], opacity: [0.9, 0.5, 0.9] }}
+            cx={x} cy={HOT_Y + HOT_H - 10}
+            rx={3 + (i % 2)} ry={5 + (i % 3) * 3}
+            fill={i % 2 === 0 ? '#f97316' : '#fbbf24'} fillOpacity={0.7}
+            animate={{
+              cy:     [HOT_Y+HOT_H-10, HOT_Y+HOT_H-26, HOT_Y+HOT_H-10],
+              ry:     [5+(i%3)*3, (5+(i%3)*3)*1.7, 5+(i%3)*3],
+              opacity:[0.75, 0.35, 0.75],
+            }}
             transition={{ duration: dur, repeat: Infinity, delay: i * 0.09, ease: 'easeInOut' }}
           />
         )
@@ -50,23 +99,25 @@ function Flames({ active, speed }) {
   )
 }
 
-// ── Snowflakes in cold reservoir ──────────────────────────────────────────────
-function Snowflakes({ active }) {
-  if (!active) return null
+// ─── SNOWFLAKES inside cold reservoir ─────────────────────────────────────────
+function Snowflakes() {
   return (
     <>
-      {[0, 1, 2, 3, 4].map(i => {
-        const x = RES_X + 32 + i * (RES_W - 64) / 4
-        const cy = COLD_Y + COLD_H / 2
+      {[0.15, 0.35, 0.55, 0.75, 0.88].map((frac, i) => {
+        const x  = RES_X + frac * RES_W
+        const cy = CLD_Y + CLD_H / 2
         return (
           <motion.g key={i}
             animate={{ rotate: [0, 360] }}
-            transition={{ duration: 4 + i * 0.6, repeat: Infinity, ease: 'linear' }}
+            transition={{ duration: 6 + i * 0.8, repeat: Infinity, ease: 'linear' }}
             style={{ transformOrigin: `${x}px ${cy}px` }}
           >
             {[0, 60, 120].map(a => {
-              const r = a * Math.PI / 180
-              return <line key={a} x1={x - 7 * Math.cos(r)} y1={cy - 7 * Math.sin(r)} x2={x + 7 * Math.cos(r)} y2={cy + 7 * Math.sin(r)} stroke="#93c5fd" strokeWidth="1.5" strokeOpacity="0.7" />
+              const rad = a * Math.PI / 180
+              return <line key={a}
+                x1={x - 7*Math.cos(rad)} y1={cy - 7*Math.sin(rad)}
+                x2={x + 7*Math.cos(rad)} y2={cy + 7*Math.sin(rad)}
+                stroke="#93c5fd" strokeWidth="1.5" strokeOpacity="0.6" />
             })}
           </motion.g>
         )
@@ -75,369 +126,427 @@ function Snowflakes({ active }) {
   )
 }
 
-// ── Heat particles Q_H (hot res → cylinder top) ───────────────────────────────
+// ─── HEAT PARTICLES ───────────────────────────────────────────────────────────
 function QHParticles({ active, speed }) {
   if (!active) return null
   return (
     <>
-      {[0, 1, 2, 3].map(i => (
-        <motion.circle key={i} r={4} fill="#f97316" fillOpacity={0.9}
+      {[0, 1, 2].map(i => (
+        <motion.circle key={i} r={3.5}
+          fill={i % 2 === 0 ? '#f97316' : '#fbbf24'}
           animate={{
-            cx: [CYL_MID + (i % 2 === 0 ? -18 : 18), CYL_MID + (i % 2 === 0 ? -4 : 4)],
-            cy: [HOT_Y + HOT_H + 2, CYL_TOP + 14],
-            opacity: [0, 1, 1, 0], r: [5, 3, 2],
+            cx:      [CY_MID + (i===0?-12:i===1?12:0), CY_MID + (i===0?-4:i===1?4:0)],
+            cy:      [HOT_Y + HOT_H + 2, CY_TOP + 14],
+            opacity: [0, 0.9, 0.9, 0],
           }}
-          transition={{ duration: 0.85 / speed, repeat: Infinity, delay: i * 0.21, ease: 'easeIn' }}
+          transition={{ duration: 0.75/speed, repeat: Infinity, delay: i*0.25, ease: 'easeIn' }}
         />
       ))}
     </>
   )
 }
 
-// ── Heat particles Q_C (cylinder bottom → cold res) ───────────────────────────
 function QCParticles({ active, speed }) {
   if (!active) return null
   return (
     <>
-      {[0, 1, 2, 3].map(i => (
-        <motion.circle key={i} r={4} fill="#3b82f6" fillOpacity={0.9}
+      {[0, 1, 2].map(i => (
+        <motion.circle key={i} r={3.5}
+          fill={i % 2 === 0 ? '#60a5fa' : '#93c5fd'}
           animate={{
-            cx: [CYL_MID + (i % 2 === 0 ? -14 : 14), CYL_MID + (i % 2 === 0 ? -24 : 24)],
-            cy: [CYL_BOT - 14, COLD_Y - 2],
-            opacity: [0, 1, 1, 0], r: [4, 3, 2],
+            cx:      [CY_MID + (i===0?-10:i===1?10:0), CY_MID + (i===0?-20:i===1?20:0)],
+            cy:      [CY_BOT - 10, CLD_Y - 2],
+            opacity: [0, 0.9, 0.9, 0],
           }}
-          transition={{ duration: 0.85 / speed, repeat: Infinity, delay: i * 0.21, ease: 'easeOut' }}
+          transition={{ duration: 0.75/speed, repeat: Infinity, delay: i*0.25, ease: 'easeOut' }}
         />
       ))}
     </>
   )
 }
 
-// ── Flywheel ──────────────────────────────────────────────────────────────────
-function Wheel({ angle }) {
+// ─── FLYWHEEL ─────────────────────────────────────────────────────────────────
+function Flywheel({ angle }) {
   return (
     <g>
-      <circle cx={WHEEL_CX} cy={WHEEL_CY} r={WHEEL_R} fill="none" stroke="#d97706" strokeWidth="6" />
-      <circle cx={WHEEL_CX} cy={WHEEL_CY} r={WHEEL_R - 11} fill="none" stroke="#fef08a" strokeWidth="1" strokeOpacity="0.25" />
-      <circle cx={WHEEL_CX} cy={WHEEL_CY} r={8} fill="#eab308" />
-      {[0, 1, 2, 3, 4, 5].map(i => {
-        const a = angle + i * Math.PI / 3
+      <circle cx={FW_CX+1} cy={FW_CY+2} r={FW_R} fill="rgba(0,0,0,0.18)" />
+      <circle cx={FW_CX}   cy={FW_CY}   r={FW_R} fill="none" stroke="#78350f" strokeWidth="8" />
+      <circle cx={FW_CX}   cy={FW_CY}   r={FW_R} fill="none" stroke="#f59e0b" strokeWidth="3" />
+      <circle cx={FW_CX}   cy={FW_CY}   r={FW_R-11} fill="none" stroke="#d97706" strokeWidth="1" strokeOpacity="0.3" />
+      {Array.from({length:8}, (_,i) => {
+        const a = angle + i * Math.PI / 4
         return <line key={i}
-          x1={WHEEL_CX + 8 * Math.cos(a)} y1={WHEEL_CY + 8 * Math.sin(a)}
-          x2={WHEEL_CX + (WHEEL_R - 4) * Math.cos(a)} y2={WHEEL_CY + (WHEEL_R - 4) * Math.sin(a)}
-          stroke="#eab308" strokeWidth="3" strokeLinecap="round" />
+          x1={FW_CX + 8*Math.cos(a)} y1={FW_CY + 8*Math.sin(a)}
+          x2={FW_CX + (FW_R-6)*Math.cos(a)} y2={FW_CY + (FW_R-6)*Math.sin(a)}
+          stroke="#d97706" strokeWidth="2.5" strokeLinecap="round" />
       })}
+      <circle cx={FW_CX} cy={FW_CY} r={10} fill="#1c1917" stroke="#d97706" strokeWidth="2.5" />
+      <circle cx={FW_CX} cy={FW_CY} r={4}  fill="#fbbf24" />
     </g>
   )
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ─── PROCESS INFO ─────────────────────────────────────────────────────────────
+const PROCESS_INFO = [
+  { label:'1→2', name:'Isothermal Expansion',   color:'#ef4444',
+    desc:'Gas absorbs heat Q_H from the hot reservoir at constant temperature T_H. The piston moves down, doing positive work.', eq:'W = nRT_H ln(V₂/V₁)' },
+  { label:'2→3', name:'Adiabatic Expansion',    color:'#a855f7',
+    desc:'Cylinder is insulated — no heat exchange. Gas continues expanding; temperature falls from T_H down to T_C.', eq:'TV^(γ−1) = const' },
+  { label:'3→4', name:'Isothermal Compression', color:'#3b82f6',
+    desc:'Gas rejects heat Q_C to the cold reservoir at constant temperature T_C. The piston moves up.', eq:'W = nRT_C ln(V₄/V₃)' },
+  { label:'4→1', name:'Adiabatic Compression',  color:'#22c55e',
+    desc:'Cylinder is insulated again. Gas is compressed back to its initial state; temperature rises from T_C to T_H.', eq:'PV^γ = const' },
+]
+
+// ─── MAIN ─────────────────────────────────────────────────────────────────────
 export default function EngineModule() {
   const { darkMode, setDarkMode } = useApp()
   const [T_H, setTH] = useState(800)
   const [T_C, setTC] = useState(300)
-  const [n, setN] = useState(1)
-  const [V1, setV1] = useState(1)
-  const [V2, setV2] = useState(4)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [speed, setSpeed] = useState(1)
+  const [n,   setN]  = useState(1)
+  const [V1,  setV1] = useState(1)
+  const [V2,  setV2] = useState(4)
+  const [isPlaying,   setIsPlaying]   = useState(false)
+  const [speed,       setSpeed]       = useState(1)
   const [showSliders, setShowSliders] = useState(false)
-  const [angle, setAngle] = useState(-Math.PI / 2)
-  const rafRef = useRef(null)
+  const [angle,       setAngle]       = useState(-Math.PI / 2)
+  const [activeStep,  setActiveStep]  = useState(0)
+
+  const rafRef  = useRef(null)
   const lastRef = useRef(null)
 
   useEffect(() => {
     if (!isPlaying) { cancelAnimationFrame(rafRef.current); lastRef.current = null; return }
     const radsPerMs = (speed * 60 * 2 * Math.PI) / 60000
-    const tick = (ts) => {
-      if (lastRef.current != null) setAngle(a => a + radsPerMs * (ts - lastRef.current))
+    const tick = ts => {
+      if (lastRef.current != null) {
+        setAngle(a => {
+          const next = a + radsPerMs * (ts - lastRef.current)
+          const norm = ((next % (Math.PI*2)) + Math.PI*2) % (Math.PI*2)
+          setActiveStep(norm < Math.PI/2 ? 0 : norm < Math.PI ? 1 : norm < 3*Math.PI/2 ? 2 : 3)
+          return next
+        })
+      }
       lastRef.current = ts
-      rafRef.current = requestAnimationFrame(tick)
+      rafRef.current  = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
     return () => { cancelAnimationFrame(rafRef.current); lastRef.current = null }
   }, [isPlaying, speed])
 
-  const reset = () => { setIsPlaying(false); setAngle(-Math.PI / 2) }
+  const reset = () => { setIsPlaying(false); setAngle(-Math.PI/2); setActiveStep(0) }
+  const step  = () => {
+    const next = (activeStep + 1) % 4
+    setActiveStep(next)
+    setAngle(-Math.PI/2 + next * Math.PI/2)
+  }
 
-  // physics
-  const eta = T_H > T_C ? efficiency(T_H, T_C) : 0
-  const Q_H = heatAbsorbed(n, T_H, V1, V2)
-  const Q_C = Math.abs(heatRejected(n, T_C, V2 * Math.pow(T_H / T_C, 2.5), V1 * Math.pow(T_H / T_C, 2.5)))
+  const eta   = T_H > T_C ? efficiency(T_H, T_C) : 0
+  const Q_H   = heatAbsorbed(n, T_H, V1, V2)
+  const Q_C   = Math.abs(heatRejected(n, T_C, V2*Math.pow(T_H/T_C,2.5), V1*Math.pow(T_H/T_C,2.5)))
   const W_net = netWork(Q_H, Q_C)
   const COP_R = T_H > T_C ? copR(T_H, T_C) : 0
 
-  const fmt = v => Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(2) + 'k' : v.toFixed(1)
-
-  // geometry
-  const pY = pistonY(angle)
-  const pTop = Math.max(CYL_TOP, Math.min(CYL_BOT - PISTON_H - 2, pY))
-  const pBot = pTop + PISTON_H
-  const cpX = CRANK_CX + CRANK_R * Math.cos(angle)
-  const cpY = CRANK_CY + CRANK_R * Math.sin(angle)
-
-  // gas color
-  const ratio = Math.max(0, Math.min(1, 1 - (pTop - CYL_TOP) / (CYL_BOT - CYL_TOP - PISTON_H)))
-  const gasColor = `rgba(${Math.round(lerp(59, 249, ratio))},${Math.round(lerp(130, 115, ratio))},${Math.round(lerp(246, 22, ratio))},0.42)`
-  const gasEdge = `rgb(${Math.round(lerp(59, 249, ratio))},${Math.round(lerp(130, 115, ratio))},${Math.round(lerp(246, 22, ratio))})`
-  const gasT = Math.round(lerp(T_C, T_H, ratio))
-
-  // phase
-  const norm = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
+  const rawPY    = pistonY(angle)
+  const pTop     = clamp(rawPY, CY_TOP, CY_BOT - PST_H - 2)
+  const pBot     = pTop + PST_H
+  const cpX      = CR_CX + CR_R * Math.cos(angle)
+  const cpY      = CR_CY + CR_R * Math.sin(angle)
+  const gasRatio = clamp(1 - (pTop - CY_TOP) / (CY_BOT - CY_TOP - PST_H), 0, 1)
+  const gasT     = Math.round(lerp(T_C, T_H, gasRatio))
+  const norm     = ((angle % (Math.PI*2)) + Math.PI*2) % (Math.PI*2)
   const expanding = norm < Math.PI
-  const qhActive = isPlaying && expanding
-  const qcActive = isPlaying && !expanding
-
-  // efficiency gauge
-  const gCX = CYL_MID, gCY = CYL_TOP - 52, gR = 28
-  const arc = eta * Math.PI * 1.5
-  const gColor = eta > 0.6 ? '#22c55e' : eta > 0.35 ? '#f59e0b' : '#ef4444'
-  const ex = gCX + gR * Math.cos(Math.PI + arc), ey = gCY + gR * Math.sin(Math.PI + arc)
+  const qhActive  = isPlaying && expanding
+  const qcActive  = isPlaying && !expanding
+  const info      = PROCESS_INFO[activeStep]
 
   return (
-    <motion.div initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -40 }}
-      className="min-h-screen bg-[#fafafa] dark:bg-[#0f172a] transition-colors duration-300">
-
+    <motion.div
+      initial={{ opacity:0, y:16 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-16 }}
+      transition={{ type:'spring', stiffness:160, damping:22 }}
+      className="min-h-screen bg-[#f8fafc] dark:bg-[#0a0f1e] flex flex-col"
+    >
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 dark:border-gray-800">
+      <div className="bg-white dark:bg-[#0f172a] border-b border-gray-100 dark:border-gray-800 px-4 sm:px-6 py-4 flex items-center justify-between">
         <BackButton />
         <div className="text-center">
-          <h1 className="font-serif text-2xl font-bold text-gray-900 dark:text-white">Carnot Engine</h1>
-          <p className="font-sans text-xs text-gray-400 mt-0.5">Mechanical cross-section · live simulation</p>
+          <h1 className="font-serif text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">Carnot Engine</h1>
+          <p className="text-xs text-gray-400 mt-0.5 tracking-wide">Engine schematic · live simulation</p>
         </div>
-        <div className="flex items-center gap-3">
-          <button onClick={() => setShowSliders(!showSliders)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-[#1e293b] shadow-sm border border-gray-100 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white text-sm font-sans transition-colors">
-            <SlidersHorizontal size={15} /><span>Params</span>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowSliders(s => !s)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all
+              ${showSliders
+                ? 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-900/20 dark:border-amber-700 dark:text-amber-400'
+                : 'bg-white dark:bg-[#1e293b] border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>
+            <SlidersHorizontal size={13}/><span className="hidden sm:inline">Params</span>
           </button>
-          <button onClick={() => setDarkMode(!darkMode)}
-            className="w-8 h-8 rounded-full bg-white dark:bg-[#1e293b] shadow-sm flex items-center justify-center text-gray-500 dark:text-gray-300 transition-colors">
-            {darkMode ? <Sun size={15} /> : <Moon size={15} />}
+          <button onClick={() => setDarkMode(d => !d)}
+            className="w-8 h-8 rounded-full bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-white transition-colors">
+            {darkMode ? <Sun size={14}/> : <Moon size={14}/>}
           </button>
         </div>
       </div>
 
-      {/* Sliders */}
+      {/* Param panel */}
       <AnimatePresence>
         {showSliders && (
-          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-[#1e293b]">
-            <div className="px-6 py-4 grid grid-cols-2 md:grid-cols-5 gap-4">
+          <motion.div initial={{ height:0, opacity:0 }} animate={{ height:'auto', opacity:1 }} exit={{ height:0, opacity:0 }}
+            className="overflow-hidden bg-white dark:bg-[#1e293b] border-b border-gray-100 dark:border-gray-800">
+            <div className="px-4 sm:px-6 py-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-5">
               {[
-                { label: 'T_H (K)', value: T_H, set: setTH, min: 301, max: 1500, step: 10 },
-                { label: 'T_C (K)', value: T_C, set: setTC, min: 50, max: 899, step: 10 },
-                { label: 'n (mol)', value: n, set: setN, min: 0.1, max: 5, step: 0.1 },
-                { label: 'V₁ (L)', value: V1, set: setV1, min: 0.1, max: 5, step: 0.1 },
-                { label: 'V₂ (L)', value: V2, set: setV2, min: 0.5, max: 20, step: 0.5 },
+                { label:'T_H', unit:'K',   val:T_H, set:setTH, min:301, max:1500, step:10  },
+                { label:'T_C', unit:'K',   val:T_C, set:setTC, min:50,  max:899,  step:10  },
+                { label:'n',   unit:'mol', val:n,   set:setN,  min:0.1, max:5,    step:0.1 },
+                { label:'V₁',  unit:'L',   val:V1,  set:setV1, min:0.1, max:5,    step:0.1 },
+                { label:'V₂',  unit:'L',   val:V2,  set:setV2, min:0.5, max:20,   step:0.5 },
               ].map(s => (
-                <div key={s.label} className="space-y-1">
-                  <div className="flex justify-between">
-                    <label className="font-mono text-xs text-gray-500 dark:text-gray-400">{s.label}</label>
-                    <span className="font-mono text-xs text-amber-600 dark:text-amber-400">{s.value}</span>
+                <div key={s.label}>
+                  <div className="flex justify-between mb-1.5">
+                    <span className="font-mono text-xs text-gray-500">{s.label} <span className="text-gray-400">({s.unit})</span></span>
+                    <span className="font-mono text-xs text-amber-600 dark:text-amber-400 font-semibold">{s.val}</span>
                   </div>
-                  <input type="range" min={s.min} max={s.max} step={s.step} value={s.value}
+                  <input type="range" min={s.min} max={s.max} step={s.step} value={s.val}
                     onChange={e => s.set(parseFloat(e.target.value))}
-                    className="w-full h-1.5 rounded accent-amber-500" />
+                    className="w-full h-1.5 rounded-full accent-amber-500 cursor-pointer" />
                 </div>
               ))}
             </div>
-            {T_H <= T_C && <p className="px-6 pb-3 font-sans text-xs text-red-500">T_H must be greater than T_C</p>}
+            {T_H <= T_C && <p className="px-6 pb-3 text-xs text-red-500 font-medium">T_H must exceed T_C</p>}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* SVG Engine */}
-      <div className="flex justify-center px-4 py-4">
-        <div className="bg-white dark:bg-[#1e293b] rounded-2xl shadow-md border border-gray-100 dark:border-gray-800 overflow-hidden w-full max-w-3xl">
-          <svg viewBox={`0 0 ${SW} ${SH}`} width="100%" style={{ display: 'block' }}>
+      <div className="flex-1 flex flex-col items-center px-3 sm:px-6 py-5 gap-4 max-w-3xl mx-auto w-full">
+
+        {/* Process pills */}
+        <div className="flex gap-2 self-start flex-wrap">
+          {PROCESS_INFO.map((p, i) => (
+            <button key={i}
+              onClick={() => { setActiveStep(i); setAngle(-Math.PI/2 + i * Math.PI/2); setIsPlaying(false) }}
+              className="px-3 py-1.5 rounded-full text-xs font-mono font-semibold border transition-all"
+              style={activeStep === i
+                ? { background: p.color, color: '#fff', borderColor: p.color, boxShadow: `0 2px 12px ${p.color}55` }
+                : { background: 'transparent', color: '#9ca3af', borderColor: '#d1d5db' }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Engine SVG */}
+        <div className="w-full bg-[#111827] rounded-2xl shadow-xl overflow-hidden border border-gray-800/50">
+          <svg viewBox={`0 0 ${SW} ${SH}`} width="100%" style={{ display:'block' }}>
             <defs>
-              <linearGradient id="hotG" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#991b1b" /><stop offset="100%" stopColor="#dc2626" />
+              <linearGradient id="hotRes" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#7f1d1d"/><stop offset="100%" stopColor="#b91c1c"/>
               </linearGradient>
-              <linearGradient id="coldG" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#1e40af" /><stop offset="100%" stopColor="#1e3a8a" />
+              <linearGradient id="coldRes" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#1e3a8a"/><stop offset="100%" stopColor="#1e40af"/>
               </linearGradient>
-              <linearGradient id="wallG" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="#64748b" /><stop offset="20%" stopColor="#cbd5e1" />
-                <stop offset="80%" stopColor="#cbd5e1" /><stop offset="100%" stopColor="#64748b" />
+              <linearGradient id="wallLR" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%"   stopColor="#1e293b"/>
+                <stop offset="14%"  stopColor="#475569"/>
+                <stop offset="50%"  stopColor="#94a3b8"/>
+                <stop offset="86%"  stopColor="#475569"/>
+                <stop offset="100%" stopColor="#1e293b"/>
               </linearGradient>
               <linearGradient id="pistG" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#e2e8f0" /><stop offset="60%" stopColor="#94a3b8" />
-                <stop offset="100%" stopColor="#475569" />
+                <stop offset="0%"   stopColor="#e2e8f0"/>
+                <stop offset="55%"  stopColor="#64748b"/>
+                <stop offset="100%" stopColor="#334155"/>
               </linearGradient>
-              <linearGradient id="crankG" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="#334155" /><stop offset="100%" stopColor="#94a3b8" />
+              <linearGradient id="rodG" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%"   stopColor="#0f172a"/>
+                <stop offset="50%"  stopColor="#64748b"/>
+                <stop offset="100%" stopColor="#0f172a"/>
               </linearGradient>
-              <filter id="glow">
-                <feGaussianBlur stdDeviation="3" result="b" />
-                <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-              </filter>
-              <marker id="arrowW" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
-                <path d="M0,0 L8,4 L0,8 Z" fill="#eab308" />
+              <marker id="arrowR" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 Z" fill="#f97316"/>
               </marker>
-              <marker id="arrowH" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
-                <path d="M0,0 L7,3.5 L0,7 Z" fill="#ef4444" />
+              <marker id="arrowB" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 Z" fill="#60a5fa"/>
               </marker>
-              <marker id="arrowC" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
-                <path d="M0,0 L7,3.5 L0,7 Z" fill="#3b82f6" />
+              <marker id="arrowY" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#fbbf24"/>
               </marker>
             </defs>
 
-            {/* subtle grid */}
-            {Array.from({ length: 12 }, (_, i) => <line key={`h${i}`} x1="0" y1={i * 50} x2={SW} y2={i * 50} stroke="#e2e8f0" strokeWidth="0.4" strokeOpacity="0.35" />)}
-            {Array.from({ length: 14 }, (_, i) => <line key={`v${i}`} x1={i * 50} y1="0" x2={i * 50} y2={SH} stroke="#e2e8f0" strokeWidth="0.4" strokeOpacity="0.35" />)}
+            {/* dot grid */}
+            {Array.from({length:20},(_,r) => Array.from({length:33},(_,c) => (
+              <circle key={`${r}-${c}`} cx={c*20+10} cy={r*24+12} r="0.65" fill="#1e293b"/>
+            )))}
 
-            {/* ── HOT RESERVOIR ── */}
-            <rect x={RES_X} y={HOT_Y} width={RES_W} height={HOT_H} rx="12" fill="url(#hotG)" />
-            <rect x={RES_X} y={HOT_Y} width={RES_W} height={HOT_H} rx="12" fill="none" stroke="#ef4444" strokeWidth="2" strokeOpacity="0.5" />
-            <rect x={RES_X + 12} y={HOT_Y + 8} width={RES_W - 24} height="7" rx="3.5" fill="white" fillOpacity="0.07" />
-            <text x={RES_X + RES_W / 2} y={HOT_Y + 27} textAnchor="middle" fill="#fca5a5" fontSize="10.5" fontFamily="monospace" fontWeight="700" letterSpacing="2">HOT RESERVOIR</text>
-            <text x={RES_X + RES_W / 2} y={HOT_Y + 47} textAnchor="middle" fill="white" fontSize="14" fontFamily="monospace" fontWeight="600">T_H = {T_H} K</text>
-            <text x={RES_X + RES_W / 2} y={HOT_Y + 65} textAnchor="middle" fill="#fb923c" fontSize="10" fontFamily="monospace">Q_H = {fmt(Q_H)} J</text>
-            <Flames active={isPlaying} speed={speed} />
+            {/* HOT RESERVOIR */}
+            <rect x={RES_X} y={HOT_Y} width={RES_W} height={HOT_H} rx={RES_RX} fill="url(#hotRes)"/>
+            <rect x={RES_X} y={HOT_Y} width={RES_W} height={HOT_H} rx={RES_RX} fill="none" stroke="#f97316" strokeWidth="1.5" strokeOpacity="0.45"/>
+            <rect x={RES_X+14} y={HOT_Y+8} width={RES_W-28} height="7" rx="3.5" fill="white" fillOpacity="0.06"/>
+            <text x={RES_X+RES_W/2} y={HOT_Y+24} textAnchor="middle" fill="#fca5a5" fontSize="9.5" fontFamily="monospace" fontWeight="700" letterSpacing="3">HOT RESERVOIR</text>
+            <text x={RES_X+RES_W/2} y={HOT_Y+44} textAnchor="middle" fill="white" fontSize="14" fontFamily="monospace" fontWeight="700">T_H = {T_H} K</text>
+            <text x={RES_X+RES_W/2} y={HOT_Y+62} textAnchor="middle" fill="#fb923c" fontSize="10" fontFamily="monospace">Q_H = {fmt(Q_H)} J</text>
+            <Flames active={isPlaying} speed={speed}/>
 
-            {/* ── COLD RESERVOIR ── */}
-            <rect x={RES_X} y={COLD_Y} width={RES_W} height={COLD_H} rx="12" fill="url(#coldG)" />
-            <rect x={RES_X} y={COLD_Y} width={RES_W} height={COLD_H} rx="12" fill="none" stroke="#3b82f6" strokeWidth="2" strokeOpacity="0.5" />
-            <rect x={RES_X + 12} y={COLD_Y + 8} width={RES_W - 24} height="7" rx="3.5" fill="white" fillOpacity="0.06" />
-            <text x={RES_X + RES_W / 2} y={COLD_Y + 27} textAnchor="middle" fill="#93c5fd" fontSize="10.5" fontFamily="monospace" fontWeight="700" letterSpacing="2">COLD RESERVOIR</text>
-            <text x={RES_X + RES_W / 2} y={COLD_Y + 47} textAnchor="middle" fill="white" fontSize="14" fontFamily="monospace" fontWeight="600">T_C = {T_C} K</text>
-            <text x={RES_X + RES_W / 2} y={COLD_Y + 65} textAnchor="middle" fill="#60a5fa" fontSize="10" fontFamily="monospace">Q_C = {fmt(Q_C)} J</text>
-            <Snowflakes active={isPlaying} />
+            {/* Q_H ARROW */}
+            <line x1={CY_MID} y1={HOT_Y+HOT_H} x2={CY_MID} y2={CY_TOP-2}
+              stroke="#f97316" strokeWidth="2" strokeDasharray="6,4"
+              strokeOpacity={qhActive ? 0.9 : 0.2} markerEnd="url(#arrowR)"/>
+            <rect x={CY_MID+5} y={HOT_Y+HOT_H+5} width="48" height="15" rx="4" fill="#431407" fillOpacity="0.9"/>
+            <text x={CY_MID+29} y={HOT_Y+HOT_H+16} textAnchor="middle" fill="#fb923c" fontSize="9" fontFamily="monospace" fontWeight="700">Q_H in</text>
+            <QHParticles active={qhActive} speed={speed}/>
 
-            {/* ── Q_H path ── */}
-            <line x1={CYL_MID} y1={HOT_Y + HOT_H} x2={CYL_MID} y2={CYL_TOP}
-              stroke="#ef4444" strokeWidth="2.5" strokeDasharray="7,4"
-              strokeOpacity={qhActive ? 0.95 : 0.25} markerEnd="url(#arrowH)" />
-            <rect x={CYL_MID + 6} y={HOT_Y + HOT_H + 4} width="56" height="17" rx="5" fill="#fef2f2" fillOpacity="0.92" />
-            <text x={CYL_MID + 34} y={HOT_Y + HOT_H + 17} textAnchor="middle" fill="#ef4444" fontSize="10" fontFamily="monospace" fontWeight="600">Q_H in</text>
-            <QHParticles active={qhActive} speed={speed} />
+            {/* CYLINDER OUTER CASING */}
+            <rect x={CX-18} y={CY_TOP-12} width={CW+36} height={CY_BOT-CY_TOP+24} rx="7" fill="url(#wallLR)"/>
+            {/* bore */}
+            <rect x={CX} y={CY_TOP} width={CW} height={CY_BOT-CY_TOP} fill="#0f172a" rx="1"/>
+            <rect x={CX}     y={CY_TOP} width={2} height={CY_BOT-CY_TOP} fill="white" fillOpacity="0.05"/>
+            <rect x={CX+CW-2} y={CY_TOP} width={2} height={CY_BOT-CY_TOP} fill="white" fillOpacity="0.03"/>
 
-            {/* ── Q_C path ── */}
-            <line x1={CYL_MID} y1={CYL_BOT} x2={CYL_MID} y2={COLD_Y}
-              stroke="#3b82f6" strokeWidth="2.5" strokeDasharray="7,4"
-              strokeOpacity={qcActive ? 0.95 : 0.25} markerEnd="url(#arrowC)" />
-            <rect x={CYL_MID + 6} y={CYL_BOT + 6} width="58" height="17" rx="5" fill="#eff6ff" fillOpacity="0.92" />
-            <text x={CYL_MID + 35} y={CYL_BOT + 19} textAnchor="middle" fill="#3b82f6" fontSize="10" fontFamily="monospace" fontWeight="600">Q_C out</text>
-            <QCParticles active={qcActive} speed={speed} />
+            {/* GAS MIST */}
+            <GasMist pBot={pBot} gasRatio={gasRatio} isPlaying={isPlaying} speed={speed}/>
 
-            {/* ── CYLINDER WALLS ── */}
-            <rect x={CYL_X - 18} y={CYL_TOP - 12} width={CYL_W + 36} height={CYL_BOT - CYL_TOP + 24} rx="7" fill="url(#wallG)" />
-            {/* cylinder interior */}
-            <rect x={CYL_X} y={CYL_TOP} width={CYL_W} height={CYL_BOT - CYL_TOP} fill="#1e293b" />
-
-            {/* gas fill */}
-            {pBot < CYL_BOT && (
-              <>
-                <rect x={CYL_X + 2} y={pBot} width={CYL_W - 4} height={Math.max(0, CYL_BOT - pBot)}
-                  fill={gasColor} filter="url(#glow)" />
-                <rect x={CYL_X + 2} y={pBot} width={CYL_W - 4} height="4" fill={gasEdge} fillOpacity="0.55" />
-              </>
-            )}
-
-            {/* gas temp label */}
-            {CYL_BOT - pBot > 35 && (
-              <text x={CYL_MID} y={(pBot + CYL_BOT) / 2 + 5} textAnchor="middle"
-                fill="white" fillOpacity="0.65" fontSize="11" fontFamily="monospace" fontWeight="600">
+            {/* gas temp */}
+            {CY_BOT - pBot > 36 && (
+              <text x={CY_MID} y={(pBot+CY_BOT)/2+5} textAnchor="middle"
+                fill="rgba(255,255,255,0.45)" fontSize="11" fontFamily="monospace" fontWeight="600">
                 T ≈ {gasT} K
               </text>
             )}
 
-            {/* ── PISTON ROD ── */}
-            <line x1={CYL_MID} y1={CYL_TOP - 12} x2={CYL_MID} y2={pTop}
-              stroke="#64748b" strokeWidth="10" strokeLinecap="round" />
-            <line x1={CYL_MID} y1={CYL_TOP - 12} x2={CYL_MID} y2={pTop}
-              stroke="#e2e8f0" strokeWidth="3" strokeLinecap="round" />
+            {/* head + base caps */}
+            <rect x={CX-18} y={CY_TOP-12} width={CW+36} height="9" rx="3" fill="#374151"/>
+            <rect x={CX-18} y={CY_BOT+3}  width={CW+36} height="9" rx="3" fill="#374151"/>
 
-            {/* ── PISTON ── */}
-            <rect x={CYL_X + PISTON_PAD} y={pTop} width={CYL_W - PISTON_PAD * 2} height={PISTON_H} rx="3" fill="url(#pistG)" />
-            <rect x={CYL_X + PISTON_PAD} y={pTop} width={CYL_W - PISTON_PAD * 2} height="5" rx="2" fill="#475569" />
-            <rect x={CYL_X + PISTON_PAD} y={pTop + PISTON_H - 5} width={CYL_W - PISTON_PAD * 2} height="5" rx="2" fill="#475569" />
-            <rect x={CYL_X + PISTON_PAD + 6} y={pTop + 7} width={(CYL_W / 2) - 16} height="3" rx="1.5" fill="white" fillOpacity="0.35" />
-
-            {/* ── CONNECTING ROD ── */}
-            <line x1={CYL_MID} y1={pTop + PISTON_H / 2} x2={cpX} y2={cpY}
-              stroke="#334155" strokeWidth="8" strokeLinecap="round" />
-            <line x1={CYL_MID} y1={pTop + PISTON_H / 2} x2={cpX} y2={cpY}
-              stroke="#94a3b8" strokeWidth="3" strokeLinecap="round" />
-            <circle cx={cpX} cy={cpY} r="7" fill="#334155" stroke="#94a3b8" strokeWidth="2" />
-            <circle cx={CYL_MID} cy={pTop + PISTON_H / 2} r="5" fill="#334155" stroke="#94a3b8" strokeWidth="2" />
-
-            {/* ── CRANKSHAFT ── */}
-            <line x1={CRANK_CX} y1={CRANK_CY} x2={cpX} y2={cpY}
-              stroke="url(#crankG)" strokeWidth="11" strokeLinecap="round" />
-            <line x1={CRANK_CX} y1={CRANK_CY} x2={WHEEL_CX} y2={WHEEL_CY}
-              stroke="#475569" strokeWidth="11" strokeLinecap="round" />
-            <line x1={CRANK_CX} y1={CRANK_CY} x2={WHEEL_CX} y2={WHEEL_CY}
-              stroke="#94a3b8" strokeWidth="4" strokeLinecap="round" />
-            <circle cx={CRANK_CX} cy={CRANK_CY} r="13" fill="#1e293b" stroke="#64748b" strokeWidth="3" />
-            <circle cx={CRANK_CX} cy={CRANK_CY} r="5" fill="#94a3b8" />
-
-            {/* ── FLYWHEEL ── */}
-            <Wheel angle={angle} />
-
-            {/* ── W_NET ARROW ── */}
-            <line x1={WHEEL_CX + WHEEL_R + 2} y1={WHEEL_CY} x2={WHEEL_CX + WHEEL_R + 52} y2={WHEEL_CY}
-              stroke="#eab308" strokeWidth="3.5" markerEnd="url(#arrowW)" />
-            <rect x={WHEEL_CX + WHEEL_R + 4} y={WHEEL_CY - 23} width="58" height="16" rx="4" fill="#fefce8" fillOpacity="0.92" />
-            <text x={WHEEL_CX + WHEEL_R + 33} y={WHEEL_CY - 11} textAnchor="middle" fill="#854d0e" fontSize="10" fontFamily="monospace" fontWeight="700">W_net</text>
-            <text x={WHEEL_CX + WHEEL_R + 33} y={WHEEL_CY + 18} textAnchor="middle" fill="#eab308" fontSize="11" fontFamily="monospace" fontWeight="700">{fmt(W_net)} J</text>
-
-            {/* ── EFFICIENCY GAUGE (above cylinder) ── */}
-            <path d={`M ${gCX - gR} ${gCY} A ${gR} ${gR} 0 1 1 ${gCX + gR} ${gCY}`}
-              fill="none" stroke="#e2e8f0" strokeWidth="5.5" strokeLinecap="round" />
-            <path d={`M ${gCX - gR} ${gCY} A ${gR} ${gR} 0 ${arc > Math.PI ? 1 : 0} 1 ${ex} ${ey}`}
-              fill="none" stroke={gColor} strokeWidth="5.5" strokeLinecap="round" />
-            <text x={gCX} y={gCY - 3} textAnchor="middle" fill={gColor} fontSize="13" fontFamily="monospace" fontWeight="800">{(eta * 100).toFixed(1)}%</text>
-            <text x={gCX} y={gCY + 11} textAnchor="middle" fill="#94a3b8" fontSize="9" fontFamily="monospace">η</text>
-
-            {/* cylinder bolt decorations */}
-            {[CYL_TOP + 22, CYL_TOP + 64, CYL_BOT - 64, CYL_BOT - 22].map((y, i) => (
+            {/* bolts */}
+            {[CY_TOP+20, CY_TOP+58, CY_BOT-58, CY_BOT-20].map((y,i) => (
               <g key={i}>
-                <circle cx={CYL_X - 10} cy={y} r="4" fill="#94a3b8" />
-                <circle cx={CYL_X + CYL_W + 10} cy={y} r="4" fill="#94a3b8" />
-                <circle cx={CYL_X - 10} cy={y} r="1.5" fill="#e2e8f0" />
-                <circle cx={CYL_X + CYL_W + 10} cy={y} r="1.5" fill="#e2e8f0" />
+                {[CX-11, CX+CW+11].map(bx => (
+                  <g key={bx}>
+                    <circle cx={bx} cy={y} r="4"   fill="#1e293b"/>
+                    <circle cx={bx} cy={y} r="2.5" fill="#4b5563"/>
+                    <circle cx={bx} cy={y} r="1"   fill="#9ca3af"/>
+                  </g>
+                ))}
               </g>
             ))}
+
+            {/* PISTON ROD */}
+            <rect x={CY_MID-4} y={CY_TOP-12} width={8} height={Math.max(1, pTop-CY_TOP+12)} fill="url(#rodG)" rx="3"/>
+            <rect x={CY_MID-1} y={CY_TOP-10} width={2} height={Math.max(1, pTop-CY_TOP+8)} fill="white" fillOpacity="0.2" rx="1"/>
+
+            {/* PISTON */}
+            <rect x={CX+3} y={pTop} width={CW-6} height={PST_H} rx="3" fill="url(#pistG)"/>
+            <rect x={CX+3} y={pTop} width={CW-6} height={4} rx="2" fill="#334155"/>
+            <rect x={CX+3} y={pTop+7}  width={CW-6} height={2.5} rx="1" fill="none" stroke="#4b5563" strokeWidth="0.8"/>
+            <rect x={CX+3} y={pTop+13} width={CW-6} height={2.5} rx="1" fill="none" stroke="#4b5563" strokeWidth="0.8"/>
+            <rect x={CX+8} y={pTop+8}  width={40}   height={2}   rx="1" fill="white" fillOpacity="0.25"/>
+
+            {/* CONNECTING ROD */}
+            <line x1={CY_MID} y1={pTop+PST_H/2} x2={cpX} y2={cpY} stroke="#0f172a" strokeWidth="8" strokeLinecap="round"/>
+            <line x1={CY_MID} y1={pTop+PST_H/2} x2={cpX} y2={cpY} stroke="#64748b" strokeWidth="3" strokeLinecap="round"/>
+            <circle cx={cpX}    cy={cpY}          r="6"   fill="#0f172a" stroke="#64748b" strokeWidth="2"/>
+            <circle cx={CY_MID} cy={pTop+PST_H/2} r="4.5" fill="#0f172a" stroke="#64748b" strokeWidth="2"/>
+
+            {/* CRANK ARM */}
+            <line x1={CR_CX} y1={CR_CY} x2={cpX}   y2={cpY}   stroke="#1e293b" strokeWidth="11" strokeLinecap="round"/>
+            <line x1={CR_CX} y1={CR_CY} x2={cpX}   y2={cpY}   stroke="#4b5563" strokeWidth="3.5" strokeLinecap="round"/>
+            <line x1={CR_CX} y1={CR_CY} x2={FW_CX} y2={FW_CY} stroke="#1e293b" strokeWidth="11" strokeLinecap="round"/>
+            <line x1={CR_CX} y1={CR_CY} x2={FW_CX} y2={FW_CY} stroke="#4b5563" strokeWidth="3.5" strokeLinecap="round"/>
+            <circle cx={CR_CX} cy={CR_CY} r="12" fill="#0f172a" stroke="#4b5563" strokeWidth="2.5"/>
+            <circle cx={CR_CX} cy={CR_CY} r="5"  fill="#64748b"/>
+
+            {/* FLYWHEEL */}
+            <Flywheel angle={angle}/>
+
+            {/* W_net arrow */}
+            <line x1={FW_CX+FW_R+3} y1={FW_CY} x2={FW_CX+FW_R+58} y2={FW_CY}
+              stroke="#fbbf24" strokeWidth="3.5" markerEnd="url(#arrowY)"/>
+            <rect x={FW_CX+FW_R+4} y={FW_CY-22} width="52" height="15" rx="4" fill="#1c1100" fillOpacity="0.9"/>
+            <text x={FW_CX+FW_R+30} y={FW_CY-11} textAnchor="middle" fill="#fbbf24" fontSize="9" fontFamily="monospace" fontWeight="700">W_net</text>
+            <text x={FW_CX+FW_R+30} y={FW_CY+18} textAnchor="middle" fill="#fbbf24" fontSize="12" fontFamily="monospace" fontWeight="700">{fmt(W_net)} J</text>
+
+            {/* Q_C ARROW */}
+            <line x1={CY_MID} y1={CY_BOT+9} x2={CY_MID} y2={CLD_Y-2}
+              stroke="#60a5fa" strokeWidth="2" strokeDasharray="6,4"
+              strokeOpacity={qcActive ? 0.9 : 0.2} markerEnd="url(#arrowB)"/>
+            <rect x={CY_MID+5} y={CY_BOT+12} width="52" height="15" rx="4" fill="#0c2254" fillOpacity="0.9"/>
+            <text x={CY_MID+31} y={CY_BOT+23} textAnchor="middle" fill="#7dd3fc" fontSize="9" fontFamily="monospace" fontWeight="700">Q_C out</text>
+            <QCParticles active={qcActive} speed={speed}/>
+
+            {/* COLD RESERVOIR */}
+            <rect x={RES_X} y={CLD_Y} width={RES_W} height={CLD_H} rx={RES_RX} fill="url(#coldRes)"/>
+            <rect x={RES_X} y={CLD_Y} width={RES_W} height={CLD_H} rx={RES_RX} fill="none" stroke="#60a5fa" strokeWidth="1.5" strokeOpacity="0.4"/>
+            <rect x={RES_X+14} y={CLD_Y+8} width={RES_W-28} height="7" rx="3.5" fill="white" fillOpacity="0.05"/>
+            <text x={RES_X+RES_W/2} y={CLD_Y+24} textAnchor="middle" fill="#93c5fd" fontSize="9.5" fontFamily="monospace" fontWeight="700" letterSpacing="3">COLD RESERVOIR</text>
+            <text x={RES_X+RES_W/2} y={CLD_Y+44} textAnchor="middle" fill="white" fontSize="14" fontFamily="monospace" fontWeight="700">T_C = {T_C} K</text>
+            <text x={RES_X+RES_W/2} y={CLD_Y+62} textAnchor="middle" fill="#60a5fa" fontSize="10" fontFamily="monospace">Q_C = {fmt(Q_C)} J</text>
+            <Snowflakes/>
           </svg>
         </div>
-      </div>
 
-      {/* Controls */}
-      <div className="flex items-center justify-center gap-4 pt-1 pb-4">
-        <button onClick={reset}
-          className="w-9 h-9 rounded-full bg-white dark:bg-[#1e293b] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center justify-center text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors">
-          <RotateCcw size={15} />
-        </button>
-        <button onClick={() => setIsPlaying(!isPlaying)}
-          className="w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg hover:scale-105 active:scale-95 transition-all"
-          style={{ background: 'linear-gradient(135deg,#3b82f6,#4f46e5)' }}>
-          {isPlaying ? <Pause size={20} /> : <Play size={20} />}
-        </button>
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-xs text-gray-400">Speed</span>
-          <input type="range" min={0.5} max={4} step={0.5} value={speed}
-            onChange={e => setSpeed(parseFloat(e.target.value))}
-            className="w-24 h-1.5 accent-blue-500" />
-          <span className="font-mono text-xs text-blue-500 w-6">{speed}×</span>
-        </div>
-      </div>
-
-      {/* Value Strip */}
-      <div className="max-w-2xl mx-auto px-6 pb-8">
-        <div className="grid grid-cols-5 gap-3">
-          {[
-            { label: 'η', value: `${(eta * 100).toFixed(1)}%`, color: '#22c55e' },
-            { label: 'Q_H', value: `${fmt(Q_H)} J`, color: '#ef4444' },
-            { label: 'Q_C', value: `${fmt(Q_C)} J`, color: '#3b82f6' },
-            { label: 'W_net', value: `${fmt(W_net)} J`, color: '#eab308' },
-            { label: 'COP_R', value: COP_R.toFixed(3), color: '#a855f7' },
-          ].map(item => (
-            <div key={item.label} className="bg-white dark:bg-[#1e293b] rounded-xl border border-gray-100 dark:border-gray-800 p-3 text-center shadow-sm">
-              <p className="font-mono text-xs text-gray-400 mb-1">{item.label}</p>
-              <p className="font-mono text-sm font-semibold" style={{ color: item.color }}>{item.value}</p>
+        {/* Process description */}
+        <AnimatePresence mode="wait">
+          <motion.div key={activeStep}
+            initial={{ opacity:0, y:6 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-6 }}
+            transition={{ duration:0.2 }}
+            className="w-full bg-white dark:bg-[#1e293b] rounded-xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm"
+          >
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: info.color }}/>
+              <h3 className="font-serif text-sm sm:text-base font-semibold text-gray-900 dark:text-white">
+                Process {info.label} — {info.name}
+              </h3>
             </div>
+            <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed mb-2">{info.desc}</p>
+            <code className="text-xs font-mono text-gray-500 dark:text-gray-500 bg-gray-50 dark:bg-[#0f172a] px-2.5 py-1 rounded-md">
+              {info.eq}
+            </code>
+          </motion.div>
+        </AnimatePresence>
+
+        {/* Controls */}
+        <div className="flex items-center justify-between w-full gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <button onClick={() => { setIsPlaying(false); step() }}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-300 font-medium hover:bg-gray-50 transition-all shadow-sm">
+              <ChevronRight size={15}/>Step
+            </button>
+            <button onClick={reset}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-300 font-medium hover:bg-gray-50 transition-all shadow-sm">
+              <RotateCcw size={14}/>Reset
+            </button>
+          </div>
+
+          <motion.button onClick={() => setIsPlaying(p => !p)}
+            whileHover={{ scale:1.05 }} whileTap={{ scale:0.95 }}
+            className="flex items-center gap-2 px-6 py-2.5 rounded-full text-white text-sm font-semibold shadow-lg"
+            style={{ background: isPlaying ? '#4f46e5' : '#f59e0b' }}
+          >
+            {isPlaying ? <><Pause size={16}/>Pause</> : <><Play size={16}/>Play</>}
+          </motion.button>
+
+          <div className="flex items-center gap-2 bg-white dark:bg-[#1e293b] rounded-xl px-3 py-2 border border-gray-200 dark:border-gray-700 shadow-sm">
+            <span className="font-mono text-xs text-gray-400">Speed</span>
+            <input type="range" min={0.25} max={4} step={0.25} value={speed}
+              onChange={e => setSpeed(parseFloat(e.target.value))}
+              className="w-24 h-1.5 accent-amber-500 cursor-pointer"/>
+            <span className="font-mono text-xs text-amber-500 font-bold w-7">{speed}×</span>
+          </div>
+        </div>
+
+        {/* Value chips */}
+        <div className="grid grid-cols-5 gap-2 w-full pb-4">
+          {[
+            { label:'η',     val:`${(eta*100).toFixed(1)}%`, color:'#22c55e' },
+            { label:'Q_H',   val:`${fmt(Q_H)} J`,            color:'#f97316' },
+            { label:'Q_C',   val:`${fmt(Q_C)} J`,            color:'#60a5fa' },
+            { label:'W_net', val:`${fmt(W_net)} J`,          color:'#fbbf24' },
+            { label:'COP_R', val:COP_R.toFixed(3),           color:'#a78bfa' },
+          ].map(c => (
+            <motion.div key={c.label} whileHover={{ y:-2 }} transition={{ type:'spring', stiffness:400 }}
+              className="bg-white dark:bg-[#1e293b] rounded-xl border border-gray-100 dark:border-gray-800 py-3 text-center shadow-sm cursor-default">
+              <p className="font-mono text-[10px] text-gray-400 mb-1 tracking-wide">{c.label}</p>
+              <p className="font-mono text-xs sm:text-sm font-bold" style={{ color: c.color }}>{c.val}</p>
+            </motion.div>
           ))}
         </div>
       </div>
