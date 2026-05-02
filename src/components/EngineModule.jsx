@@ -6,7 +6,6 @@ import { efficiency, heatAbsorbed, heatRejected, netWork, copR } from '../utils/
 import { useApp } from '../context/AppContext'
 
 // ── SVG layout constants ──────────────────────────────────────────────────────
-// Wider canvas: 860 wide so flywheel + phase pills fit without clipping
 const SW = 860, SH = 580
 const CYL_X = 220, CYL_W = 190
 const CYL_TOP = 145, CYL_BOT = 410
@@ -19,21 +18,20 @@ const RES_X = 160, RES_W = 310
 const HOT_Y = 14, HOT_H = 72
 const COLD_Y = 490, COLD_H = 72
 
-// Phase pills sit in the right panel: x=700..840
 const PILL_X = 700
 const PILL_W = 140
 
-function pistonY(angle: number) {
+function pistonY(angle) {
   const cpX = CRANK_CX + CRANK_R * Math.cos(angle)
   const cpY = CRANK_CY + CRANK_R * Math.sin(angle)
   const dx = CYL_MID - cpX
   return cpY - Math.sqrt(Math.max(0, ROD_LEN * ROD_LEN - dx * dx))
 }
 
-function lerp(a: number, b: number, t: number) { return a + (b - a) * t }
+function lerp(a, b, t) { return a + (b - a) * t }
 
 // ── Flames ────────────────────────────────────────────────────────────────────
-function Flames({ active, speed }: { active: boolean; speed: number }) {
+function Flames({ active, speed }) {
   if (!active) return null
   return (
     <>
@@ -55,7 +53,7 @@ function Flames({ active, speed }: { active: boolean; speed: number }) {
 }
 
 // ── Snowflakes ────────────────────────────────────────────────────────────────
-function Snowflakes({ active }: { active: boolean }) {
+function Snowflakes({ active }) {
   if (!active) return null
   return (
     <>
@@ -80,7 +78,7 @@ function Snowflakes({ active }: { active: boolean }) {
 }
 
 // ── Heat particles ────────────────────────────────────────────────────────────
-function QHParticles({ active, speed }: { active: boolean; speed: number }) {
+function QHParticles({ active, speed }) {
   if (!active) return null
   return <>
     {[0,1,2,3].map(i => (
@@ -92,7 +90,7 @@ function QHParticles({ active, speed }: { active: boolean; speed: number }) {
   </>
 }
 
-function QCParticles({ active, speed }: { active: boolean; speed: number }) {
+function QCParticles({ active, speed }) {
   if (!active) return null
   return <>
     {[0,1,2,3].map(i => (
@@ -105,7 +103,7 @@ function QCParticles({ active, speed }: { active: boolean; speed: number }) {
 }
 
 // ── Flywheel ──────────────────────────────────────────────────────────────────
-function Wheel({ angle }: { angle: number }) {
+function Wheel({ angle }) {
   return (
     <g>
       <circle cx={WHEEL_CX} cy={WHEEL_CY} r={WHEEL_R} fill="none" stroke="#d97706" strokeWidth="6" />
@@ -130,7 +128,7 @@ const PHASE_STEPS = [
   { label: '4→1', line1: 'Adiabatic',   line2: 'Compression', color: '#22c55e', range: [Math.PI*3/2, Math.PI*2] },
 ]
 
-function PhasePills({ norm }: { norm: number }) {
+function PhasePills({ norm }) {
   const activeIdx = PHASE_STEPS.findIndex(s => norm >= s.range[0] && norm < s.range[1])
   return (
     <>
@@ -149,15 +147,12 @@ function PhasePills({ norm }: { norm: number }) {
               strokeWidth={isActive ? 1.5 : 1}
               strokeOpacity={isActive ? 1 : 0.35}
             />
-            {/* dot indicator */}
             <circle cx={PILL_X + 16} cy={y + 18} r={isActive ? 5 : 3.5}
               fill={isActive ? col : 'none'}
               stroke={isActive ? col : '#475569'}
               strokeWidth="1.5"
             />
-            {/* step label */}
             <text x={PILL_X + 30} y={y + 22} fill={isActive ? col : '#64748b'} fontSize="11" fontFamily="monospace" fontWeight="700">{step.label}</text>
-            {/* name */}
             <text x={PILL_X + 12} y={y + 44} fill={isActive ? col : '#64748b'} fillOpacity={isActive ? 0.85 : 0.5} fontSize="10.5" fontFamily="sans-serif">{step.line1}</text>
             <text x={PILL_X + 12} y={y + 60} fill={isActive ? col : '#64748b'} fillOpacity={isActive ? 0.85 : 0.5} fontSize="10.5" fontFamily="sans-serif">{step.line2}</text>
           </g>
@@ -179,19 +174,26 @@ export default function EngineModule() {
   const [speed, setSpeed] = useState(1)
   const [showSliders, setShowSliders] = useState(false)
   const [angle, setAngle] = useState(-Math.PI / 2)
-  const rafRef = useRef<number>()
-  const lastRef = useRef<number | null>(null)
+  const rafRef = useRef(null)
+  const lastRef = useRef(null)
 
   useEffect(() => {
-    if (!isPlaying) { cancelAnimationFrame(rafRef.current!); lastRef.current = null; return }
+    if (!isPlaying) {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+      lastRef.current = null
+      return
+    }
     const radsPerMs = (speed * 60 * 2 * Math.PI) / 60000
-    const tick = (ts: number) => {
-      if (lastRef.current != null) setAngle(a => a + radsPerMs * (ts - lastRef.current!))
+    const tick = (ts) => {
+      if (lastRef.current != null) setAngle(a => a + radsPerMs * (ts - lastRef.current))
       lastRef.current = ts
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
-    return () => { cancelAnimationFrame(rafRef.current!); lastRef.current = null }
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+      lastRef.current = null
+    }
   }, [isPlaying, speed])
 
   const reset = () => { setIsPlaying(false); setAngle(-Math.PI / 2) }
@@ -203,7 +205,7 @@ export default function EngineModule() {
   const W_net = netWork(Q_H, Q_C)
   const COP_R = T_H > T_C ? copR(T_H, T_C) : 0
 
-  const fmt = (v: number) => Math.abs(v) >= 1e6 ? (v/1e6).toFixed(2)+'M' : Math.abs(v) >= 1e3 ? (v/1e3).toFixed(2)+'k' : v.toFixed(1)
+  const fmt = (v) => Math.abs(v) >= 1e6 ? (v/1e6).toFixed(2)+'M' : Math.abs(v) >= 1e3 ? (v/1e3).toFixed(2)+'k' : v.toFixed(1)
 
   // geometry
   const pY = pistonY(angle)
@@ -224,7 +226,7 @@ export default function EngineModule() {
   const qhActive = isPlaying && expanding
   const qcActive = isPlaying && !expanding
 
-  // efficiency gauge — top right panel, no overlap with anything
+  // efficiency gauge
   const gCX = PILL_X + PILL_W/2, gCY = 96, gR = 30
   const arc = eta * Math.PI * 1.5
   const gColor = eta > 0.6 ? '#22c55e' : eta > 0.35 ? '#f59e0b' : '#ef4444'
@@ -283,7 +285,7 @@ export default function EngineModule() {
         )}
       </AnimatePresence>
 
-      {/* SVG Engine — full width, no white card wrapper */}
+      {/* SVG Engine */}
       <div className="w-full px-2 py-4">
         <svg viewBox={`0 0 ${SW} ${SH}`} width="100%" style={{ display: 'block' }}>
           <defs>
@@ -423,7 +425,7 @@ export default function EngineModule() {
           <line x1={PILL_X - 14} y1={50} x2={PILL_X - 14} y2={SH - 40}
             stroke="#334155" strokeWidth="1" strokeOpacity="0.35" />
 
-          {/* ── EFFICIENCY GAUGE — right panel, top, no overlap ── */}
+          {/* ── EFFICIENCY GAUGE ── */}
           <path d={`M ${gCX-gR} ${gCY} A ${gR} ${gR} 0 1 1 ${gCX+gR} ${gCY}`}
             fill="none" stroke="#1e293b" strokeWidth="5" strokeLinecap="round" />
           <path d={`M ${gCX-gR} ${gCY} A ${gR} ${gR} 0 ${arc > Math.PI ? 1 : 0} 1 ${gex} ${gey}`}
