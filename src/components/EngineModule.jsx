@@ -26,7 +26,7 @@ const PHASE_STEPS = [
     label: '1→2',
     title: 'Isothermal Expansion',
     color: '#ef4444',
-    range: [0, Math.PI / 2] as [number, number],
+    range: [0, Math.PI / 2],
     formula: 'W = Q_H = nRT_H · ln(V₂/V₁)',
     laws: 'ΔU = 0  •  T = T_H = const',
   },
@@ -34,7 +34,7 @@ const PHASE_STEPS = [
     label: '2→3',
     title: 'Adiabatic Expansion',
     color: '#a855f7',
-    range: [Math.PI / 2, Math.PI] as [number, number],
+    range: [Math.PI / 2, Math.PI],
     formula: 'W = nCᵥ(T_H − T_C)',
     laws: 'Q = 0  •  ΔU = −W',
   },
@@ -42,7 +42,7 @@ const PHASE_STEPS = [
     label: '3→4',
     title: 'Isothermal Compression',
     color: '#3b82f6',
-    range: [Math.PI, Math.PI * 3 / 2] as [number, number],
+    range: [Math.PI, Math.PI * 3 / 2],
     formula: 'W = Q_C = nRT_C · ln(V₄/V₃)',
     laws: 'ΔU = 0  •  T = T_C = const',
   },
@@ -50,28 +50,28 @@ const PHASE_STEPS = [
     label: '4→1',
     title: 'Adiabatic Compression',
     color: '#22c55e',
-    range: [Math.PI * 3 / 2, Math.PI * 2] as [number, number],
+    range: [Math.PI * 3 / 2, Math.PI * 2],
     formula: 'W = nCᵥ(T_C − T_H)',
     laws: 'Q = 0  •  ΔU = −W',
   },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function pistonY(angle: number) {
+function pistonY(angle) {
   const cpX = CRANK_CX + CRANK_R * Math.cos(angle)
   const cpY = CRANK_CY + CRANK_R * Math.sin(angle)
   const dx = CYL_MID - cpX
   return cpY - Math.sqrt(Math.max(0, ROD_LEN * ROD_LEN - dx * dx))
 }
 
-function lerp(a: number, b: number, t: number) { return a + (b - a) * t }
+function lerp(a, b, t) { return a + (b - a) * t }
 
-function getNorm(angle: number) {
+function getNorm(angle) {
   return ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
-function Flames({ active, speed }: { active: boolean; speed: number }) {
+function Flames({ active, speed }) {
   if (!active) return null
   return <>
     {[0, 1, 2, 3, 4, 5].map(i => {
@@ -90,7 +90,7 @@ function Flames({ active, speed }: { active: boolean; speed: number }) {
   </>
 }
 
-function Snowflakes({ active }: { active: boolean }) {
+function Snowflakes({ active }) {
   if (!active) return null
   return <>
     {[0, 1, 2, 3, 4].map(i => {
@@ -115,7 +115,7 @@ function Snowflakes({ active }: { active: boolean }) {
   </>
 }
 
-function QHParticles({ active, speed }: { active: boolean; speed: number }) {
+function QHParticles({ active, speed }) {
   if (!active) return null
   return <>
     {[0, 1, 2, 3].map(i => (
@@ -132,7 +132,7 @@ function QHParticles({ active, speed }: { active: boolean; speed: number }) {
   </>
 }
 
-function QCParticles({ active, speed }: { active: boolean; speed: number }) {
+function QCParticles({ active, speed }) {
   if (!active) return null
   return <>
     {[0, 1, 2, 3].map(i => (
@@ -149,7 +149,7 @@ function QCParticles({ active, speed }: { active: boolean; speed: number }) {
   </>
 }
 
-function Wheel({ angle }: { angle: number }) {
+function Wheel({ angle }) {
   return (
     <g>
       <circle cx={WHEEL_CX} cy={WHEEL_CY} r={WHEEL_R} fill="none" stroke="#d97706" strokeWidth="5" />
@@ -178,8 +178,8 @@ export default function EngineModule() {
   const [speed, setSpeed] = useState(1)
   const [showSliders, setShowSliders] = useState(false)
   const [angle, setAngle] = useState(-Math.PI / 2)
-  const rafRef = useRef<number | null>(null)
-  const lastRef = useRef<number | null>(null)
+  const rafRef = useRef(null)
+  const lastRef = useRef(null)
 
   // Animation loop
   useEffect(() => {
@@ -189,8 +189,8 @@ export default function EngineModule() {
       return
     }
     const radsPerMs = (speed * 60 * 2 * Math.PI) / 60000
-    const tick = (ts: number) => {
-      if (lastRef.current != null) setAngle(a => a + radsPerMs * (ts - lastRef.current!))
+    const tick = (ts) => {
+      if (lastRef.current != null) setAngle(a => a + radsPerMs * (ts - lastRef.current))
       lastRef.current = ts
       rafRef.current = requestAnimationFrame(tick)
     }
@@ -222,7 +222,7 @@ export default function EngineModule() {
   const W_net = netWork(Q_H, Q_C)
   const COP_R = T_H > T_C ? copR(T_H, T_C) : 0
 
-  const fmt = (v: number) =>
+  const fmt = (v) =>
     Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(2) + 'M' :
     Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(2) + 'k' :
     v.toFixed(1)
